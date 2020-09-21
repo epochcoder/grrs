@@ -1,13 +1,14 @@
 use colored::Colorize;
 use exitfailure::ExitFailure;
 use failure::ResultExt;
+use std::io::{BufRead, Write};
 
 /// Searches over the supplied input for the pattern supplied.
 /// Writes output to the specified writer as so
-pub fn find_matches(print_line_numbers: bool,
+pub fn find_matches<W: Write + ?Sized, R: BufRead>(print_line_numbers: bool,
                     pattern: &String,
-                    writer: &mut Box<dyn std::io::Write>,
-                    reader: impl std::io::BufRead) -> Result<(), ExitFailure> {
+                    writer: &mut Box<W>,
+                    reader: R) -> Result<(), ExitFailure> {
     for (idx, line) in reader.lines().enumerate() {
         let line = line
             .with_context(|e| format!("Could not read line: {}", e))?;
@@ -25,6 +26,8 @@ pub fn find_matches(print_line_numbers: bool,
     Ok(())
 }
 
+// ensure this is only compiled for the test module
+#[cfg(test)]
 mod tests {
 
     use std::io::{BufReader, Write};
@@ -38,7 +41,7 @@ mod tests {
 
         // as_bytes is needed as &[u8] implements the BufRead trait
         let res = find_matches(false, &pattern.to_string(),
-                               result as &mut Box<dyn Write>, BufReader::new(text_to_search.as_bytes()));
+                               &mut result, BufReader::new(text_to_search.as_bytes()));
         assert!(res.is_ok());
 
         let result = String::from_utf8_lossy(&result);
@@ -50,10 +53,9 @@ mod tests {
     #[test]
     fn shows_all_lines_when_empty() {
         let mut result: Box<Vec<u8>> = Box::new(Vec::new());
-        let mut writer: &mut Box<dyn Write> = &mut result;
         let source = "Should\nshow all\nlines";
 
-        find_matches(false, &String::new(), writer, source.as_bytes())
+        find_matches(false, &String::new(), &mut result, source.as_bytes())
             .expect("should find results");
 
         let result = String::from_utf8_lossy(&result);

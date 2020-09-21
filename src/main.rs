@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use std::fs::{File};
+use std::fs::File;
 use std::io::{self, BufReader, Write};
 use std::path::PathBuf;
 
@@ -9,10 +9,11 @@ use failure::ResultExt;
 use structopt::StructOpt;
 
 fn main() -> Result<(), ExitFailure> {
-    // let time = std::time::SystemTime::now();
+    let time = std::time::SystemTime::now();
     let args = Cli::from_args();
 
-    let mut out: Box<dyn Write> = Box::new(io::stdout());
+    // allocate the pointer to stdout on the heap
+    let mut out = Box::new(io::stdout());
     let path: &Option<PathBuf> = &args.path;
 
     let res = match path {
@@ -25,13 +26,17 @@ fn main() -> Result<(), ExitFailure> {
         }
     };
 
-    // println!("Completed in: {:?}", time.elapsed().unwrap());
+    if args.show_time {
+        println!("Completed in: {:?}", time.elapsed().unwrap());
+    }
+
     res
 }
 
-fn search_path(path: impl AsRef<std::path::Path> + Debug, mut out: &mut Box<dyn Write>, args: &Cli) -> Result<(), ExitFailure> {
-    if path.as_ref().is_dir() {
-        for entry in path.as_ref().read_dir()? {
+fn search_path(path: impl AsRef<std::path::Path> + Debug, mut out: &mut Box<impl Write + ?Sized>, args: &Cli) -> Result<(), ExitFailure> {
+    let path_ref = path.as_ref();
+    if path_ref.is_dir() {
+        for entry in path_ref.read_dir()? {
             let entry = entry?;
             let entry_type = entry.file_type()?;
 
@@ -46,7 +51,7 @@ fn search_path(path: impl AsRef<std::path::Path> + Debug, mut out: &mut Box<dyn 
     Ok(())
 }
 
-fn search_file<P: AsRef<std::path::Path> + Debug>(path: &P, mut out: &mut Box<dyn Write>, args: &Cli) -> Result<(), ExitFailure> {
+fn search_file<P: AsRef<std::path::Path> + Debug>(path: &P, mut out: &mut Box<impl Write + ?Sized>, args: &Cli) -> Result<(), ExitFailure> {
     println!("\nSearching file: {}\n", path.as_ref().file_name().unwrap().to_string_lossy().red());
 
     let file = File::open(path)
@@ -67,4 +72,7 @@ struct Cli {
     /// Should line numbers be printed
     #[structopt(short, long)]
     print_line_numbers: bool,
+    /// Should the search time be shows
+    #[structopt(short, long)]
+    show_time: bool,
 }
