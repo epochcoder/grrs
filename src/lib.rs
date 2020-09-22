@@ -8,10 +8,7 @@ use failure::ResultExt;
 /// prints a path based on a toggle provided
 /// returns true if the path was printed
 pub fn print_path<P: AsRef<Path> + ?Sized>(path: &P) {
-    let pretty_name = path.as_ref()
-        .file_name().unwrap()
-        .to_string_lossy().red();
-
+    let pretty_name = path.as_ref().display().to_string().red();
     println!("\n{}", pretty_name);
 }
 
