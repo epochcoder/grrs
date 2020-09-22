@@ -55,6 +55,8 @@ fn search_path(path: impl AsRef<std::path::Path> + Debug,
                 search_path(&entry.path(), &mut out, args)?
             }
         }
+    } else if path_ref.is_file() {
+        search_file(&path_ref, &mut out, args)?
     }
 
     Ok(())
