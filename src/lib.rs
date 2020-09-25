@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::thread::JoinHandle;
@@ -10,6 +10,7 @@ use colored::Colorize;
 use exitfailure::ExitFailure;
 use failure::ResultExt;
 use structopt::StructOpt;
+use threadpool::ThreadPool;
 
 pub struct FileSearchResult {
     matched_lines: Vec<(usize, String)>,
@@ -18,7 +19,7 @@ pub struct FileSearchResult {
 
 pub enum SearchInput {
     File(PathBuf),
-    String(String)
+    String(String),
 }
 
 pub struct SearchMessage {
@@ -59,7 +60,9 @@ pub fn create_results_processor(options: Arc<SearchOptions>) -> (JoinHandle<()>,
 
     let handle = thread::spawn(move || {
         let std_out = io::stdout();
-        let mut writer = std_out.lock();
+
+        // important! if this channel is locked we have no debugging! since all print lines will try to acquire a lock on stdout
+        let mut writer = std_out;//.lock();
 
         for search_result in receiver {
             if let Some(file_name) = search_result.file_name {
@@ -85,28 +88,40 @@ pub fn create_results_processor(options: Arc<SearchOptions>) -> (JoinHandle<()>,
 pub fn create_search_processor(results_processor: Sender<FileSearchResult>) -> Result<(JoinHandle<()>, Sender<SearchMessage>), ExitFailure> {
     let (sender, receiver): (Sender<SearchMessage>, Receiver<SearchMessage>) = mpsc::channel();
 
+    // receive the message in a dedicated thread
     let handle = thread::spawn(move || {
+
+        // create thread pool for processor thread (don't know how to share it yet)
+        let thread_pool = ThreadPool::new(8);
+
+        // wait/block on receiver messages
         for search_message in receiver {
-            let (reader, file_name) = match &search_message.input {
-                SearchInput::File(path) => {
-                    let file = File::open(path)
-                        .with_context(|_e| format!("{} {:?}", "Error reading".red(), path))
-                        .unwrap();
+            // clone processor so we get the multi-producer implementation
+            let results_processor = results_processor.clone();
 
-                    (Box::new(BufReader::new(file)) as Box<dyn BufRead>, Option::Some(path.display().to_string()))
-                }
-                SearchInput::String(string) => {
-                    (Box::new(BufReader::new(string.as_bytes())) as Box<dyn BufRead>, Option::None)
-                }
-            };
+            // kick off a worker for processing
+            thread_pool.execute(move || {
+                let (reader, file_name) = match &search_message.input {
+                    SearchInput::File(path) => {
+                        let file = File::open(path)
+                            .with_context(|_e| format!("{} {:?}", "Error reading".red(), path))
+                            .unwrap();
 
-            let results = search_reader(reader, &search_message.options.pattern);
+                        (Box::new(BufReader::new(file)) as Box<dyn BufRead>, Option::Some(path.display().to_string()))
+                    }
+                    SearchInput::String(string) => {
+                        (Box::new(BufReader::new(string.as_bytes())) as Box<dyn BufRead>, Option::None)
+                    }
+                };
 
-            results_processor.send(FileSearchResult {
-                file_name,
-                matched_lines: results,
-            }).unwrap()
+                results_processor.send(FileSearchResult {
+                    file_name,
+                    matched_lines: search_reader(reader, &search_message.options.pattern)
+                }).unwrap();
+            });
         }
+
+        // thread will exit as soon as corresponding channel sender gets drop (hanged up)
     });
 
     Ok((handle, sender))
@@ -129,15 +144,22 @@ fn search_reader(reader: impl BufRead, pattern: &String) -> Vec<(usize, String)>
     results
 }
 
-// Synchronous
+// ========================================================
+// --------------------- Synchronous (single thread)
 // ➜  grrs git:(master) ✗ cargo run -- "Piotr" ~/evb -ptm
 // Completed in: 109.314656s
 
-// Asynchronous (Manually)
+// --------------------- Asynchronous (Manually)
 // Completed in: 91.771192s
 
-// Workers?
+// --------------------- My own Workers?
+// 91.991514s probably made a mistake......
 
+// --------------------- threadpool crate
+// Completed in: 12.999917s
+// yeah, i fucked something up
+
+// ========================================================
 // ensure this is only compiled for the test module
 
 // #[cfg(test)]
@@ -174,5 +196,79 @@ fn search_reader(reader: impl BufRead, pattern: &String) -> Vec<(usize, String)>
 //         let result = String::from_utf8_lossy(&result);
 //
 //         assert_eq!(result.trim(), source);
+//     }
+// }
+//
+// type Job = Box<dyn FnOnce() + Send + 'static>;
+//
+// pub enum WorkerMessage {
+//     Start,
+//     Job(Job),
+//     Stop
+// }
+//
+// pub struct ThreadPokkol {
+//     _name: String,
+//     sender: Mutex<Sender<WorkerMessage>>,
+//     workers: Vec<JoinHandle<()>>
+// }
+//
+// //TODO: create custom worker instead of raw handles in pool!!
+// impl ThreadPool {
+//
+//     pub fn submit<F>(&mut self, job: F)
+//     where
+//         F: FnOnce(),
+//         F: Send + 'static,
+//     {
+//         self.sender.lock().unwrap()
+//             .send(WorkerMessage::Job(Box::new(job)))
+//             .unwrap();
+//     }
+//
+//     pub fn stop(self) {
+//         for _i in 0..self.workers.len() {
+//             self.sender.lock().unwrap().send(WorkerMessage::Stop).unwrap();
+//         }
+//
+//         self.workers.into_iter()
+//             .for_each(|handle| handle.join().unwrap());
+//     }
+//
+//     pub fn new(name: String, num_workers: u8) -> ThreadPool {
+//         let mut workers = vec![];
+//
+//         let (sender, receiver) = mpsc::channel();
+//         let receiver = Arc::new(Mutex::new(receiver));
+//
+//         for i in 0..num_workers {
+//             let worker_receiver = receiver.clone();
+//             let worker_name = format!("{}_{}", &name, i);
+//
+//             workers.push(thread::spawn(move || {
+//                 loop {
+//                     let guard = worker_receiver.lock().unwrap();
+//                     match guard.recv().unwrap() {
+//                         WorkerMessage::Start => println!("started worker: {}", &worker_name),
+//                         WorkerMessage::Job(job) => {
+//                             let time = std::time::SystemTime::now();
+//                             println!("running job for worker: {}", &worker_name);
+//                             job();
+//                             println!("completed job: {} in: {:?}", &worker_name, time.elapsed().unwrap());
+//                         },
+//                         WorkerMessage::Stop => {
+//                             //println!("terminating worker: {}", &worker_name);
+//                             break;
+//                         }
+//                     }
+//                 }
+//             }));
+//         }
+//
+//         ThreadPool {
+//             _name: name,
+//             workers,
+//             sender: Mutex::new(sender)
+//         }
 //     }
 // }
