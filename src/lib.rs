@@ -72,6 +72,7 @@ pub fn create_results_processor(options: Arc<SearchOptions>) -> (JoinHandle<()>,
             }
 
             for (index, line) in search_result.matched_lines {
+                //TODO: add options for only printing matches portion of the line with trailing and leading text
                 if options.print_line_numbers {
                     writeln!(writer, "{:>4}. {}", (index + 1).to_string().blue(), line)
                 } else {
