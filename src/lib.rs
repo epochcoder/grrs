@@ -1,6 +1,6 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
-use std::path::{PathBuf};
+use std::io::{self, BufRead, BufReader, stdin, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -13,12 +13,17 @@ use structopt::StructOpt;
 
 pub struct FileSearchResult {
     matched_lines: Vec<(usize, String)>,
-    file_name: String,
+    file_name: Option<String>,
+}
+
+pub enum SearchInput {
+    File(PathBuf),
+    String(String)
 }
 
 pub struct SearchMessage {
     options: Arc<SearchOptions>,
-    path: PathBuf,
+    input: SearchInput,
 }
 
 /// Searches for the pattern in the supplied file using Rust!
@@ -41,10 +46,10 @@ pub struct SearchOptions {
 }
 
 impl SearchMessage {
-    pub fn new(path: PathBuf, options: Arc<SearchOptions>) -> SearchMessage {
+    pub fn new(input: SearchInput, options: Arc<SearchOptions>) -> SearchMessage {
         SearchMessage {
             options,
-            path,
+            input,
         }
     }
 }
@@ -54,11 +59,13 @@ pub fn create_results_processor(options: Arc<SearchOptions>) -> (JoinHandle<()>,
 
     let handle = thread::spawn(move || {
         let std_out = io::stdout();
-        let mut writer = std_out;//.lock();
+        let mut writer = std_out.lock();
 
         for search_result in receiver {
-            if !search_result.matched_lines.is_empty() || options.include_empty_matches {
-                writeln!(writer, "\n{}", &search_result.file_name.red()).unwrap();
+            if let Some(file_name) = search_result.file_name {
+                if !search_result.matched_lines.is_empty() || options.include_empty_matches {
+                    writeln!(writer, "\n{}", file_name.red()).unwrap();
+                }
             }
 
             for (index, line) in search_result.matched_lines {
@@ -80,15 +87,23 @@ pub fn create_search_processor(results_processor: Sender<FileSearchResult>) -> R
 
     let handle = thread::spawn(move || {
         for search_message in receiver {
-            let file = File::open(&search_message.path)
-                .with_context(|_e| format!("{} {:?}", "Error reading".red(), &search_message.path))
-                .unwrap();
+            let (reader, file_name) = match &search_message.input {
+                SearchInput::File(path) => {
+                    let file = File::open(path)
+                        .with_context(|_e| format!("{} {:?}", "Error reading".red(), path))
+                        .unwrap();
 
-            let reader = BufReader::new(file);
+                    (Box::new(BufReader::new(file)) as Box<dyn BufRead>, Option::Some(path.display().to_string()))
+                }
+                SearchInput::String(string) => {
+                    (Box::new(BufReader::new(string.as_bytes())) as Box<dyn BufRead>, Option::None)
+                }
+            };
+
             let results = search_reader(reader, &search_message.options.pattern);
 
             results_processor.send(FileSearchResult {
-                file_name: search_message.path.display().to_string(),
+                file_name,
                 matched_lines: results,
             }).unwrap()
         }
@@ -97,7 +112,7 @@ pub fn create_search_processor(results_processor: Sender<FileSearchResult>) -> R
     Ok((handle, sender))
 }
 
-pub fn search_reader(reader: impl BufRead, pattern: &String) -> Vec<(usize, String)> {
+fn search_reader(reader: impl BufRead, pattern: &String) -> Vec<(usize, String)> {
     let mut results = vec![];
 
     for (i, line) in reader.lines().enumerate() {

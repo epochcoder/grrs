@@ -6,7 +6,7 @@ use std::sync::mpsc::Sender;
 use exitfailure::ExitFailure;
 use structopt::StructOpt;
 
-use grrs::{SearchMessage, SearchOptions};
+use grrs::{SearchInput, SearchMessage, SearchOptions};
 
 fn main() -> Result<(), ExitFailure> {
     let time = std::time::SystemTime::now();
@@ -21,10 +21,8 @@ fn main() -> Result<(), ExitFailure> {
             search_path(path, search_processor, args.clone())
         }
         _ => {
+            drop(search_processor);
             Ok(())
-            // let input = io::stdin();
-            // let path: Option<&Path> = None;
-            // grrs::find_matches(args.print_line_numbers, path, &args.pattern, &mut out, input.lock())
         }
     };
 
@@ -53,7 +51,7 @@ fn search_path(path: impl AsRef<std::path::Path> + Debug,
         }
     } else if path_ref.is_file() {
         search_processor.send(SearchMessage::new(
-            path_ref.to_path_buf(), options.clone()))?;
+            SearchInput::File(path_ref.to_path_buf()), options.clone()))?;
     }
 
     Ok(())
