@@ -1,3 +1,5 @@
+mod threadpool;
+
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,6 +9,7 @@ use exitfailure::ExitFailure;
 use structopt::StructOpt;
 
 use grrs::{SearchInput, SearchMessage, SearchOptions};
+use crate::threadpool::ThreadPool;
 
 fn main() -> Result<(), ExitFailure> {
     let time = std::time::SystemTime::now();
@@ -32,6 +35,17 @@ fn main() -> Result<(), ExitFailure> {
     if args.time {
         println!("Completed in: {:?}", time.elapsed().unwrap());
     }
+
+
+    let mut tp = ThreadPool::new("pool".to_string(), 8);
+
+    for i in 1..9 {
+        tp.submit(move ||
+            println!("running: {}", i.to_string()));
+    }
+
+    tp.stop();
+
 
     res
 }
