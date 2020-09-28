@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::thread::JoinHandle;
@@ -13,7 +13,7 @@ use structopt::StructOpt;
 use threadpool::ThreadPool;
 
 pub struct FileSearchResult {
-    matched_lines: Vec<(usize, String)>,
+    matched_lines: Vec<MatchResult>,
     file_name: Option<String>,
 }
 
@@ -44,6 +44,9 @@ pub struct SearchOptions {
     /// Include empty matches
     #[structopt(short, long)]
     pub include_empty_matches: bool,
+    /// How many characters should be show as the context if the match
+    #[structopt(short, long, default_value="0")]
+    pub match_context: usize
 }
 
 impl SearchMessage {
@@ -71,12 +74,12 @@ pub fn create_results_processor(options: Arc<SearchOptions>) -> (JoinHandle<()>,
                 }
             }
 
-            for (index, line) in search_result.matched_lines {
+            for r in search_result.matched_lines {
                 //TODO: add options for only printing matches portion of the line with trailing and leading text
                 if options.print_line_numbers {
-                    writeln!(writer, "{:>4}. {}", (index + 1).to_string().blue(), line)
+                    writeln!(writer, "{:>4}. {}", (r.index + 1).to_string().blue(), r.result)
                 } else {
-                    writeln!(writer, "{}", line)
+                    writeln!(writer, "{}", r.result)
                 }.with_context(|e| format!("Could not write to out: {}", e))
                     .unwrap();
             }
@@ -117,7 +120,7 @@ pub fn create_search_processor(results_processor: Sender<FileSearchResult>) -> R
 
                 results_processor.send(FileSearchResult {
                     file_name,
-                    matched_lines: search_reader(reader, &search_message.options.pattern)
+                    matched_lines: search_reader(reader, search_message.options.match_context, &search_message.options.pattern),
                 }).unwrap();
             });
         }
@@ -128,7 +131,7 @@ pub fn create_search_processor(results_processor: Sender<FileSearchResult>) -> R
     Ok((handle, sender))
 }
 
-fn search_reader(reader: impl BufRead, pattern: &String) -> Vec<(usize, String)> {
+fn search_reader(reader: impl BufRead, match_context: usize, pattern: &String) -> Vec<MatchResult> {
     let mut results = vec![];
 
     for (i, line) in reader.lines().enumerate() {
@@ -137,12 +140,69 @@ fn search_reader(reader: impl BufRead, pattern: &String) -> Vec<(usize, String)>
             Err(_) => continue
         };
 
-        if line.contains(pattern) {
-            results.push((i, line));
+        // make context configurable....
+        if let Some(result) = MatchResult::new(i, line).parse(match_context, pattern) {
+            results.push(result);
         }
     }
 
     results
+}
+
+struct MatchResult {
+    index: usize,
+    raw: String,
+    result: String
+}
+
+impl MatchResult {
+
+    fn new(index: usize, raw: String) -> Self {
+        MatchResult {
+            index,
+            raw,
+            result: String::new()
+        }
+    }
+
+    fn parse(mut self, context: usize, pattern: &String) -> Option<Self> {
+        let p_len = pattern.len();
+        let l_len = self.raw.len();
+
+        let context = if context == 0 {
+            l_len
+        } else {
+            context
+        };
+
+        match self.raw.find(pattern) {
+            Some(m_start) => {
+                let context_start = m_start as i32 - context as i32;
+                let start: (usize, &str) = if context_start > 0 {
+                    (context_start as usize, "...")
+                } else {
+                    (0, "")
+                };
+
+                let context_end = m_start + p_len + context;
+                let end: (usize, &str) = if context_end >= l_len {
+                    (l_len, "")
+                } else {
+                    (context_end, "...")
+                };
+
+                self.result += &*format!("{}{}{}{}{}",
+                                      start.1,
+                                      &self.raw[(start.0)..m_start],
+                                      &self.raw[m_start..(m_start + p_len)].green(),
+                                      &self.raw[m_start + p_len..(end.0)],
+                                      end.1);
+
+                Some(self)
+            }
+            _ => None
+        }
+    }
 }
 
 // ========================================================
